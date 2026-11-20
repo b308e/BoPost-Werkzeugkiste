@@ -422,6 +422,25 @@ function ymd(a,b){let y=b.getFullYear()-a.getFullYear(),m=b.getMonth()-a.getMont
 const addMonths=(d,n)=>{const r=new Date(d.getFullYear(),d.getMonth()+n,1);r.setDate(Math.min(d.getDate(),new Date(r.getFullYear(),r.getMonth()+1,0).getDate()));return r};
 const vol=(ml)=>ml>=1000?trimN(ml/1000,3)+' l':trimN(ml,1)+' ml';
 
+/* ===== Zinsrechner (Geldanlage) – Rechenkern ===== */
+const ZFREQ={d:365,m:12,q:4,y:1};
+const ZLABEL={d:'Täglich',m:'Monatlich',q:'Vierteljährlich',y:'Jährlich',s:'Ausgezahlt (einfache Zinsen)'};
+const zinsYears=(n,u)=>u==='y'?n:u==='m'?n/12:n/365;
+function zinsCalc(P,ratePct,years,way){
+  if(!(P>0)||!(ratePct>=0)||!(years>0))throw new Error('Bitte Betrag, Zins und Laufzeit prüfen');
+  if(years>200)throw new Error('Laufzeit zu lang (maximal 200 Jahre)');
+  const r=ratePct/100;let end,apy;
+  if(way==='s'){end=P*(1+r*years);apy=r}
+  else{const m=ZFREQ[way];end=P*Math.pow(1+r/m,m*years);apy=Math.pow(1+r/m,m)-1}
+  if(!isFinite(end))throw new Error('Ergebnis zu groß');
+  return{end,interest:end-P,apy}}
+const zEur=x=>EUR(x),zRaw=x=>raw(x,2),fmtNum=(x,d=6)=>trimN(x,d);
+const zUnits=[['y','Jahre'],['m','Monate'],['d','Tage']];
+const zWays=[['m','Monatlich'],['d','Täglich'],['q','Vierteljährlich'],['y','Jährlich'],['s','Ausgezahlt']];
+const zDur=(t,u)=>fmtNum(t)+' '+{y:'J.',m:'Mon.',d:'Tage'}[u];
+const zRows=r=>r.map(x=>({l:x[0],v:x[1],c:x[2],big:x[3]==='big'}));
+const zWrap=f=>v=>{const o=Object.assign({},v);['p','z','t','x','za','zb'].forEach(k=>{if(k in o)o[k]=N(o[k])});try{return f(o)}catch(e){return e.message}};
+/* ===== Ende Kern ===== */
 const TOOLS={
 date:{modes:[
  {k:'span',label:'Zeitraum',intro:'Wie viele Tage liegen zwischen zwei Daten?',fields:[{k:'a',l:'Von',t:'date',def:todayS},{k:'b',l:'Bis',t:'date',def:todayS}],
@@ -454,6 +473,35 @@ loan:{intro:'Monatliche Rate eines Annuitätendarlehens (gleichbleibende Rate).'
  calc:v=>{const P=N(v.p),z=N(v.z),j=N(v.j);if(!(P>0)||isNaN(z)||!(j>0))return'Werte eingeben.';const n=Math.round(j*12),r=z/1200;const rate=r===0?P/n:P*r/(1-Math.pow(1+r,-n));return{rows:[{l:'Monatliche Rate',v:EUR(rate),big:1,c:raw(rate,2)},{l:'Gesamtzahlung',v:EUR(rate*n)},{l:'Zinskosten',v:EUR(rate*n-P)},{l:'Raten',v:n+' Monate'}],log:[`${EUR(P)}, ${v.z} %, ${v.j} J.`,EUR(rate)+' / Monat']}}},
 save:{intro:'Wie viel Geld ist es am Ende? Zinsen werden monatlich gutgeschrieben, Sparrate am Monatsende.',fields:[{k:'s',l:'Startkapital (€)',t:'num'},{k:'r',l:'Sparrate pro Monat (€)',t:'num'},{k:'z',l:'Zins p. a. (%)',t:'num'},{k:'j',l:'Dauer (Jahre)',t:'num'}],
  calc:v=>{const s=N(v.s)||0,r=N(v.r)||0,z=N(v.z),j=N(v.j);if(isNaN(z)||!(j>0)||(!s&&!r))return'Werte eingeben.';const n=Math.round(j*12),i=z/1200;const fv=i===0?s+r*n:s*Math.pow(1+i,n)+r*((Math.pow(1+i,n)-1)/i);const ein=s+r*n;return{rows:[{l:'Endkapital',v:EUR(fv),big:1,c:raw(fv,2)},{l:'Eingezahlt',v:EUR(ein)},{l:'Zinsen',v:EUR(fv-ein)}],log:[`${EUR(s)} + ${EUR(r)}/Mon., ${v.z} %, ${v.j} J.`,EUR(fv)]}}},
+zins:{modes:[
+ {k:'one',label:'Geldanlage',intro:'Ich lege Geld bei der Bank an – was habe ich am Ende?',
+  fields:[{k:'p',l:'Anlagebetrag (€)',t:'num',def:'10000'},{k:'z',l:'Zins p. a. (%)',t:'num',def:'3'},{k:'t',l:'Laufzeit',t:'num',def:'5'},{k:'u',l:'Einheit',t:'select',o:zUnits},{k:'f',l:'Zinsgutschrift (Ausgezahlt = ohne Zinseszins)',t:'select',o:zWays,full:1},{k:'x',l:'Steuer auf Zinsen (%, optional)',t:'num',ph:'z. B. 26,375',full:1}],
+  calc:zWrap(v=>{
+   if(isNaN(v.p)||isNaN(v.z)||isNaN(v.t))return null;
+   const yrs=zinsYears(v.t,v.u),r=zinsCalc(v.p,v.z,yrs,v.f);
+   const rows=[['Endbetrag',zEur(r.end),zRaw(r.end),'big'],['Zinsen gesamt',zEur(r.interest),zRaw(r.interest)]];
+   if(v.f!=='s'){const s=zinsCalc(v.p,v.z,yrs,'s');rows.push(['davon Zinseszins',zEur(r.interest-s.interest),zRaw(r.interest-s.interest)])}
+   rows.push(['Effektiver Jahreszins',fmtNum(r.apy*100,3)+' %']);
+   if(!isNaN(v.x)&&v.x>0){const tax=r.interest*v.x/100;rows.push(['Steuer ('+fmtNum(v.x,3)+' % der Zinsen)','− '+zEur(tax),zRaw(tax)],['Endbetrag nach Steuer',zEur(r.end-tax),zRaw(r.end-tax)])}
+   return{rows:zRows(rows),log:[zEur(v.p)+' · '+fmtNum(v.z,3)+' % · '+zDur(v.t,v.u)+' · '+ZLABEL[v.f],zEur(r.end),zRaw(r.end)]}})},
+ {k:'freq',label:'Gutschrift',intro:'Gleicher Zins, andere Gutschrift: Was bringt täglich, monatlich oder jährlich – und was ohne Zinseszins?',
+  fields:[{k:'p',l:'Anlagebetrag (€)',t:'num',def:'10000'},{k:'z',l:'Zins p. a. (%)',t:'num',def:'3'},{k:'t',l:'Laufzeit',t:'num',def:'10'},{k:'u',l:'Einheit',t:'select',o:zUnits}],
+  calc:zWrap(v=>{
+   if(isNaN(v.p)||isNaN(v.z)||isNaN(v.t))return null;
+   const yrs=zinsYears(v.t,v.u),res={};['d','m','q','y','s'].forEach(k=>{res[k]=zinsCalc(v.p,v.z,yrs,k)});
+   const rows=['d','m','q','y','s'].map((k,i)=>[ZLABEL[k],zEur(res[k].end),zRaw(res[k].end),i===0?'big':'']);
+   const gain=res.d.end-res.y.end;
+   rows.push(['Täglich statt jährlich','+ '+zEur(gain),zRaw(gain)],['Zinseszins-Effekt (täglich)','+ '+zEur(res.d.end-res.s.end),zRaw(res.d.end-res.s.end)]);
+   return{rows:zRows(rows),log:['Gutschrift: '+zEur(v.p)+' · '+fmtNum(v.z,3)+' % · '+zDur(v.t,v.u),'täglich '+zEur(res.d.end),zRaw(res.d.end)]}})},
+ {k:'cmp',label:'2 Angebote',intro:'Zwei Bankangebote mit gleichem Betrag und gleicher Laufzeit vergleichen. „Ausgezahlt“ = Zinsen werden ausgezahlt, ohne Zinseszins.',
+  fields:[{k:'p',l:'Anlagebetrag (€)',t:'num',def:'10000'},{k:'t',l:'Laufzeit',t:'num',def:'5'},{k:'u',l:'Einheit',t:'select',o:zUnits,full:1},{k:'za',l:'Angebot A: Zins (%)',t:'num',def:'3'},{k:'fa',l:'A: Gutschrift',t:'select',o:zWays},{k:'zb',l:'Angebot B: Zins (%)',t:'num',def:'3,1'},{k:'fb',l:'B: Gutschrift',t:'select',o:zWays}],
+  calc:zWrap(v=>{
+   if(isNaN(v.p)||isNaN(v.t)||isNaN(v.za)||isNaN(v.zb))return null;
+   const yrs=zinsYears(v.t,v.u),a=zinsCalc(v.p,v.za,yrs,v.fa),b=zinsCalc(v.p,v.zb,yrs,v.fb);
+   const diff=b.end-a.end,tie=Math.abs(diff)<0.005;
+   const winner=tie?'Gleich gut':(diff>0?'Angebot B':'Angebot A')+' (+ '+zEur(Math.abs(diff))+')';
+   return{rows:zRows([['Besser',winner,winner,'big'],['A: Endbetrag',zEur(a.end),zRaw(a.end)],['B: Endbetrag',zEur(b.end),zRaw(b.end)],['A: Zinsen',zEur(a.interest),zRaw(a.interest)],['B: Zinsen',zEur(b.interest),zRaw(b.interest)],['A: Effektiver Jahreszins',fmtNum(a.apy*100,3)+' %'],['B: Effektiver Jahreszins',fmtNum(b.apy*100,3)+' %']]),
+    log:['A '+fmtNum(v.za,3)+' % '+ZLABEL[v.fa].toLowerCase()+' vs. B '+fmtNum(v.zb,3)+' % '+ZLABEL[v.fb].toLowerCase(),tie?'Gleich gut':(diff>0?'B':'A')+' besser: + '+zEur(Math.abs(diff)),zRaw(Math.abs(diff))]}})}]},
 fuel:{modes:[
  {k:'cost',label:'Fahrtkosten',intro:'Was kostet eine Fahrt?',fields:[{k:'d',l:'Strecke (km)',t:'num'},{k:'c',l:'Verbrauch (l/100 km)',t:'num',ph:'6,5'},{k:'p',l:'Preis pro Liter (€)',t:'num',ph:'1,80',full:1}],
   calc:v=>{const d=N(v.d),c=N(v.c),p=N(v.p);if(!(d>0)||!(c>0)||!(p>0))return'Werte eingeben.';const l=d*c/100;return{rows:[{l:'Kosten',v:EUR(l*p),big:1,c:raw(l*p,2)},{l:'Verbrauch',v:trimN(l,2)+' l'},{l:'Kosten pro 100 km',v:EUR(c*p)}],log:[`${v.d} km, ${v.c} l/100 km, ${v.p} €/l`,EUR(l*p)]}}},
@@ -706,7 +754,7 @@ function buildHist(){
 /* ---------- Übersicht / Leiste ---------- */
 const META={calc:['🧮','Rechner','Rechnen'],sci:['𝑓','Wissenschaft','Rechnen'],price:['🏷️','Preis','Rechnen'],pct:['％','Prozent','Rechnen'],tip:['🍽️','Trinkgeld','Rechnen'],unit:['📏','Einheiten','Rechnen'],
  post:['✉️','Brief-Porto','Alltag'],date:['📅','Datum','Alltag'],work:['🕒','Arbeitszeit','Alltag'],mix:['🧪','Mischen','Alltag'],timer:['⏲️','Timer','Alltag'],random:['🎲','Zufall','Alltag'],
- fx:['💱','Währung','Geld'],loan:['🏦','Kredit','Geld'],save:['🐖','Sparen','Geld'],fuel:['⛽','Sprit','Geld'],ratio:['⚖️','Dreisatz','Geld'],uprice:['🛒','Stückpreis','Geld'],
+ fx:['💱','Währung','Geld'],loan:['🏦','Kredit','Geld'],save:['🐖','Sparen','Geld'],zins:['📈','Zinsen','Geld'],fuel:['⛽','Sprit','Geld'],ratio:['⚖️','Dreisatz','Geld'],uprice:['🛒','Stückpreis','Geld'],
  base:['🔢','Zahlsysteme','Weiteres'],list:['✅','Liste','Weiteres'],notes:['📝','Notizen','Weiteres'],hist:['🕘','Verlauf','Weiteres']};
 const SHORT={sci:'Wiss.',post:'Porto',uprice:'Stückpr.',work:'Arbeit',random:'Zufall',unit:'Einh.',base:'Zahlen',notes:'Notizen'};
 let cur='calc',editing=false;
